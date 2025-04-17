@@ -18,7 +18,7 @@ function UI.createButton(text, x, y, w, h, onClick)
     }
 end
 
--- Создание поля ввода
+-- Создание поля ввода (обновленная версия)
 function UI.createInput(x, y, w, h, default)
     return {
         type = "input",
@@ -28,7 +28,8 @@ function UI.createInput(x, y, w, h, default)
         width = w or 20,
         height = h or 3,
         active = false,
-        selected = false
+        selected = false,
+        cursorPos = 1  -- Начинаем с начала поля
     }
 end
 
@@ -56,66 +57,101 @@ function UI.draw(buttons, inputs)
         term.write(btn.text)
     end
     
-    -- Отрисовка полей ввода
+    -- Отрисовка полей ввода (обновленная)
     for i, inp in ipairs(inputs) do
-        local border = inp.selected and colors.orange or colors.gray
+        local border = inp.active and colors.orange or inp.selected and colors.lime or colors.gray
         term.setBackgroundColor(border)
         
+        -- Рамка поля
         for dy = 0, inp.height - 1 do
             term.setCursorPos(inp.x, inp.y + dy)
             term.write((" "):rep(inp.width))
         end
         
+        -- Внутренняя область
         term.setBackgroundColor(colors.white)
         for dy = 1, inp.height - 2 do
             term.setCursorPos(inp.x + 1, inp.y + dy)
             term.write((" "):rep(inp.width - 2))
         end
         
-        term.setCursorPos(inp.x + 2, inp.y + 1)
-        term.setTextColor(colors.black)
-        term.write(inp.text)
+        -- Отображение текста с учетом позиции курсора
+        local displayText = inp.text
+        local textOffset = 0
         
+        -- Если текст не помещается, обрезаем его
+        if #displayText > inp.width - 4 then
+            if inp.cursorPos > inp.width - 4 then
+                textOffset = inp.cursorPos - (inp.width - 4)
+                displayText = displayText:sub(textOffset + 1, textOffset + inp.width - 4)
+            else
+                displayText = displayText:sub(1, inp.width - 4)
+            end
+        end
+        
+        term.setCursorPos(inp.x + 2, inp.y + 1)
+        term.setBackgroundColor(colors.white)
+        term.setTextColor(colors.black)
+        term.write(displayText)
+        
+        -- Курсор (если поле активно)
         if inp.active then
-            term.setCursorPos(inp.x + 2 + #inp.text, inp.y + 1)
-            term.setBackgroundColor(colors.red)
-            term.write(" ")
+            local cursorX = inp.x + 2 + (inp.cursorPos - textOffset - 1)
+            if cursorX >= inp.x + 2 and cursorX < inp.x + inp.width - 2 then
+                term.setCursorPos(cursorX, inp.y + 1)
+                term.setBackgroundColor(colors.red)
+                term.write(" ")
+            end
         end
     end
 end
 
--- Обработка текстового ввода
+-- Обработка текстового ввода (обновленная версия)
 function UI.handleTextInput(input, buttons, inputs)
-    local cursorPos = #input.text
+    input.active = true
+    input.cursorPos = 1  -- Курсор в начале текста
     
-    while true do
+    while input.active do
         UI.draw(buttons, inputs)
-        term.setCursorPos(input.x + 2 + cursorPos, input.y + 1)
-        term.setBackgroundColor(colors.red)
-        term.write(" ")
         
-        local event, key = os.pullEvent()
+        local event, key, x, y = os.pullEvent()
         
         if event == "char" then
-            if #input.text < input.width - 4 then
-                input.text = input.text .. key
-                cursorPos = #input.text
-            end
+            -- Вставка символа на текущей позиции курсора
+            input.text = input.text:sub(1, input.cursorPos - 1) .. key .. input.text:sub(input.cursorPos + 1)
+            input.cursorPos = input.cursorPos + 1
+            
         elseif event == "key" then
             if key == 257 then -- Enter
-                break
+                input.active = false
             elseif key == 259 then -- Backspace
-                if cursorPos > 0 then
-                    input.text = input.text:sub(1, -2)
-                    cursorPos = #input.text
+                if input.cursorPos > 1 then
+                    -- Удаление символа перед курсором
+                    input.text = input.text:sub(1, input.cursorPos - 2) .. input.text:sub(input.cursorPos)
+                    input.cursorPos = input.cursorPos - 1
+                end
+            elseif key == 263 then -- Left arrow
+                if input.cursorPos > 1 then
+                    input.cursorPos = input.cursorPos - 1
+                end
+            elseif key == 262 then -- Right arrow
+                if input.cursorPos <= #input.text then
+                    input.cursorPos = input.cursorPos + 1
                 end
             end
+            
         elseif event == "mouse_click" then
-            break
+            -- Проверяем, был ли клик вне поля ввода
+            if x < input.x or x >= input.x + input.width or
+               y < input.y or y >= input.y + input.height then
+                input.active = false
+            else
+                -- Устанавливаем курсор в позицию клика
+                local clickPos = x - input.x - 1
+                input.cursorPos = math.max(1, math.min(clickPos, #input.text + 1))
+            end
         end
     end
-    
-    input.active = false
 end
 
 -- Основной цикл обработки событий
@@ -123,6 +159,9 @@ function UI.run(buttons, inputs)
     -- Начальное выделение
     if #buttons > 0 then
         buttons[1].selected = true
+    elseif #inputs > 0 then
+        inputs[1].selected = true
+        UI.selected = #buttons + 1
     end
     
     UI.draw(buttons, inputs)
@@ -130,9 +169,8 @@ function UI.run(buttons, inputs)
     while true do
         local event, key, x, y = os.pullEvent()
         
-        -- Обработка кликов мышкой
         if event == "mouse_click" then
-            -- Проверка кнопок
+            -- Обработка кликов по кнопкам
             for i, btn in ipairs(buttons) do
                 if x >= btn.x and x < btn.x + btn.width and
                    y >= btn.y and y < btn.y + btn.height then
@@ -141,27 +179,21 @@ function UI.run(buttons, inputs)
                 end
             end
             
-            -- Проверка полей ввода
+            -- Обработка кликов по полям ввода
             for i, inp in ipairs(inputs) do
                 if x >= inp.x and x < inp.x + inp.width and
                    y >= inp.y and y < inp.y + inp.height then
                     UI.selected = #buttons + i
-                    inp.active = true
                     UI.handleTextInput(inp, buttons, inputs)
                 end
             end
         
-        -- Обработка клавиатуры
         elseif event == "key" then
-            -- Навигация вниз
+            -- Навигация стрелками или WSAD
             if key == 264 or key == 83 then -- Down/S
                 UI.selected = math.min(UI.selected + 1, #buttons + #inputs)
-            
-            -- Навигация вверх
             elseif key == 265 or key == 87 then -- Up/W
                 UI.selected = math.max(UI.selected - 1, 1)
-            
-            -- Активация элемента
             elseif key == 257 then -- Enter
                 if UI.selected <= #buttons then
                     if buttons[UI.selected].onClick then 
@@ -169,19 +201,17 @@ function UI.run(buttons, inputs)
                     end
                 else
                     local inp = inputs[UI.selected - #buttons]
-                    inp.active = true
                     UI.handleTextInput(inp, buttons, inputs)
                 end
             end
-        end
-        
-        -- Обновление выделения
-        for i, btn in ipairs(buttons) do
-            btn.selected = (i == UI.selected)
-        end
-        for i, inp in ipairs(inputs) do
-            inp.selected = (#buttons + i == UI.selected)
-            inp.active = false -- Сбрасываем активность при навигации
+            
+            -- Обновление выделения
+            for i, btn in ipairs(buttons) do
+                btn.selected = (i == UI.selected)
+            end
+            for i, inp in ipairs(inputs) do
+                inp.selected = (#buttons + i == UI.selected)
+            end
         end
         
         UI.draw(buttons, inputs)
@@ -190,17 +220,13 @@ end
 
 -- Пример использования
 local buttons = {
-    UI.createButton("Enter", 10, 5, 10, 3, function() 
-        print("Entered") 
-    end),
-    UI.createButton("Cancel", 10, 10, 10, 3, function() 
-        print("Canceled!") 
+    UI.createButton("Сохранить", 10, 5, 12, 3, function() 
+        print("Текст сохранен!")
     end)
 }
 
 local inputs = {
-    UI.createInput(10, 15, 20, 3, "Login"),
-    UI.createInput(10, 20, 20, 3, "Pass")
+    UI.createInput(10, 10, 25, 3, "Введите текст")
 }
 
 -- Запуск интерфейса
