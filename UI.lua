@@ -3,6 +3,59 @@ local UI = {}
 -- Настройки экрана
 UI.screenWidth, UI.screenHeight = term.getSize()
 UI.selected = 1
+UI.scrollOffsets = {}
+UI.screens = {}       -- Таблица всех экранов
+UI.currentScreen = 1  -- Текущий активный экран
+
+-- Создание нового экрана
+function UI.createScreen()
+    local screen = {
+        buttons = {},
+        inputs = {},
+        labels = {},
+        buttonArrays = {}
+    }
+    table.insert(UI.screens, screen)
+    return #UI.screens
+end
+
+-- Переключение на экран по ID
+function UI.setScreen(id)
+    if id >= 1 and id <= #UI.screens then
+        UI.currentScreen = id
+        UI.selected = 1
+        return true
+    end
+    return false
+end
+
+function UI.addButton(screenId, button)
+    table.insert(UI.screens[screenId].buttons, button)
+end
+
+function UI.addInput(screenId, input)
+    table.insert(UI.screens[screenId].inputs, input)
+end
+
+function UI.addLabel(screenId, label)
+    table.insert(UI.screens[screenId].labels, label)
+end
+
+function UI.addButtonArray(screenId, buttonArray)
+    table.insert(UI.screens[screenId].buttonArrays, buttonArray)
+end
+
+function UI.createLabel(text, x, y, fgColor, bgColor)
+    return {
+        type = "label",
+        text = text,
+        x = x,
+        y = y,
+        fgColor = fgColor or colors.white,
+        bgColor = bgColor or colors.black,
+        visible = true
+    }
+end
 
 -- Создание кнопки
 function UI.createButton(text, x, y, w, h, onClick)
@@ -18,6 +71,39 @@ function UI.createButton(text, x, y, w, h, onClick)
     }
 end
 
+-- Создание массива кнопок
+function UI.createButtonArray(x, y, w, h, filePath, visibleRows, onClick)
+    local buttons = {}
+    -- Чтение кнопок из файла
+    if fs.exists(filePath) then
+        for line in io.lines(filePath) do
+            if line and line ~= "" then
+                table.insert(buttons, {
+                    text = line,
+                    onClick = function() 
+                        if onClick then 
+                            onClick(line) 
+                        end
+                    end,
+                    selected = false
+                })
+            end
+        end
+    end
+    
+    return {
+        type = "buttonArray",
+        x = x,
+        y = y,
+        width = w,
+        height = h,
+        buttons = buttons,
+        visibleRows = visibleRows or math.max(1, h - 2),
+        scrollOffset = 0,
+        selected = false
+    }
+end
+
 -- Создание поля ввода (обновленная версия)
 function UI.createInput(x, y, w, h, default)
     return {
@@ -29,17 +115,28 @@ function UI.createInput(x, y, w, h, default)
         height = h or 3,
         active = false,
         selected = false,
-        cursorPos = 1  -- Начинаем с начала поля
+        cursorPos = 1,  -- Изменено: курсор в начале
+        isPlaceholder = default ~= nil -- Добавлен флаг для плейсхолдера
     }
 end
 
 -- Отрисовка интерфейса
-function UI.draw(buttons, inputs)
+function UI.draw(buttons, inputs, labels, buttonArrays)
     term.setBackgroundColor(colors.blue)
     term.clear()
     
+    -- Отрисовка текстовых виджетов
+    for i, label in ipairs(labels or {}) do
+        if label.visible then
+            term.setTextColor(label.fgColor)
+            term.setBackgroundColor(label.bgColor)
+            term.setCursorPos(label.x, label.y)
+            term.write(label.text)
+        end
+    end
+    
     -- Отрисовка кнопок
-    for i, btn in ipairs(buttons) do
+    for i, btn in ipairs(buttons or {}) do
         local bg = btn.selected and colors.lime or colors.green
         term.setBackgroundColor(bg)
         
@@ -48,7 +145,7 @@ function UI.draw(buttons, inputs)
             term.write((" "):rep(btn.width))
         end
         
-        term.setBackgroundColor(colors.green)
+        term.setBackgroundColor(bg)
         term.setTextColor(colors.black)
         term.setCursorPos(
             btn.x + math.floor((btn.width - #btn.text)/2),
@@ -79,19 +176,17 @@ function UI.draw(buttons, inputs)
         local displayText = inp.text
         local textOffset = 0
         
-        -- Если текст не помещается, обрезаем его
-        if #displayText > inp.width - 4 then
-            if inp.cursorPos > inp.width - 4 then
-                textOffset = inp.cursorPos - (inp.width - 4)
-                displayText = displayText:sub(textOffset + 1, textOffset + inp.width - 4)
-            else
-                displayText = displayText:sub(1, inp.width - 4)
-            end
+        local maxVisible = inp.width - 4
+        local textOffset = math.max(0, inp.cursorPos - maxVisible)
+        if inp.cursorPos > maxVisible then
+            displayText = inp.text:sub(textOffset + 1, textOffset + maxVisible)
+        else
+            displayText = inp.text:sub(1, maxVisible)
         end
         
         term.setCursorPos(inp.x + 2, inp.y + 1)
         term.setBackgroundColor(colors.white)
-        term.setTextColor(colors.black)
+        term.setTextColor(inp.isPlaceholder and colors.gray or colors.black)
         term.write(displayText)
         
         -- Курсор (если поле активно)
@@ -104,23 +199,71 @@ function UI.draw(buttons, inputs)
             end
         end
     end
+
+        -- Отрисовка массивов кнопок
+    for i, array in ipairs(buttonArrays or {}) do
+        local border = array.selected and colors.lime or colors.gray
+        term.setBackgroundColor(border)
+        
+        -- Рамка
+        for dy = 0, array.height - 1 do
+            term.setCursorPos(array.x, array.y + dy)
+            term.write((" "):rep(array.width))
+        end
+        
+        -- Внутренняя область
+        term.setBackgroundColor(colors.black)
+        for dy = 1, array.height - 2 do
+            term.setCursorPos(array.x + 1, array.y + dy)
+            term.write((" "):rep(array.width - 2))
+        end
+        
+        -- Отрисовка видимых кнопок
+        for i = 1, array.visibleRows do
+            local btnIndex = i + array.scrollOffset
+            if btnIndex <= #array.buttons then
+                local btn = array.buttons[btnIndex]
+                local btnY = array.y + 1 + (i-1)
+                
+                if btnY < array.y + array.height - 1 then
+                    local bg = (btn.selected and colors.lime) or colors.green
+                    term.setBackgroundColor(bg)
+                    term.setCursorPos(array.x + 1, btnY)
+                    term.write((" "):rep(array.width - 2))
+                    
+                    term.setTextColor(colors.black)
+                    term.setCursorPos(
+                        array.x + math.floor((array.width - #btn.text)/2),
+                        btnY
+                    )
+                    term.write(btn.text)
+                end
+            end
+        end
+    end
 end
 
 -- Обработка текстового ввода (обновленная версия)
-function UI.handleTextInput(input, buttons, inputs)
+function UI.handleTextInput(input, buttons, inputs, labels, buttonArrays)
+    -- Очистка плейсхолдера при первом клике
+    if input.isPlaceholder then
+        input.text = ""
+        input.isPlaceholder = false
+        input.cursorPos = 1
+    end
+    
     input.active = true
-    input.cursorPos = 1  -- Курсор в начале текста
     
     while input.active do
-        UI.draw(buttons, inputs)
+        UI.draw(buttons, inputs, labels, buttonArrays)
         
         local event, key, x, y = os.pullEvent()
         
         if event == "char" then
-            -- Вставка символа на текущей позиции курсора
-            input.text = input.text:sub(1, input.cursorPos - 1) .. key .. input.text:sub(input.cursorPos + 1)
+            -- Всегда разрешаем ввод, убрана проверка длины
+            input.text = input.text:sub(1, input.cursorPos - 1) .. key .. input.text:sub(input.cursorPos)
             input.cursorPos = input.cursorPos + 1
-            
+
         elseif event == "key" then
             if key == 257 then -- Enter
                 input.active = false
@@ -155,23 +298,32 @@ function UI.handleTextInput(input, buttons, inputs)
 end
 
 -- Основной цикл обработки событий
-function UI.run(buttons, inputs)
-    -- Начальное выделение
-    if #buttons > 0 then
-        buttons[1].selected = true
-    elseif #inputs > 0 then
-        inputs[1].selected = true
-        UI.selected = #buttons + 1
+function UI.run()
+
+    if #UI.screens == 0 then
+        UI.createScreen()
     end
     
-    UI.draw(buttons, inputs)
+    -- Начальное выделение для текущего экрана
+    local screen = UI.screens[UI.currentScreen]
+    UI.selected = 1
+    if #screen.buttons > 0 then
+      screen.buttons[1].selected = true
+    elseif #screen.inputs > 0 then
+      screen.inputs[1].selected = true
+    elseif #screen.buttonArrays > 0 then
+      screen.buttonArrays[1].selected = true
+    end
+
+    UI.draw(screen.buttons, screen.inputs, screen.labels, screen.buttonArrays)
     
     while true do
         local event, key, x, y = os.pullEvent()
+        local screen = UI.screens[UI.currentScreen] -- Получаем текущий экран
         
         if event == "mouse_click" then
             -- Обработка кликов по кнопкам
-            for i, btn in ipairs(buttons) do
+            for i, btn in ipairs(screen.buttons) do
                 if x >= btn.x and x < btn.x + btn.width and
                    y >= btn.y and y < btn.y + btn.height then
                     UI.selected = i
@@ -180,54 +332,81 @@ function UI.run(buttons, inputs)
             end
             
             -- Обработка кликов по полям ввода
-            for i, inp in ipairs(inputs) do
+            for i, inp in ipairs(screen.inputs) do
                 if x >= inp.x and x < inp.x + inp.width and
                    y >= inp.y and y < inp.y + inp.height then
-                    UI.selected = #buttons + i
-                    UI.handleTextInput(inp, buttons, inputs)
+                    UI.selected = #screen.buttons + i
+                    UI.handleTextInput(inp, screen.buttons, screen.inputs, screen.labels)
+                end
+            end
+            
+            -- Обработка кликов по массивам кнопок
+            for i, array in ipairs(screen.buttonArrays) do
+                if x >= array.x and x < array.x + array.width and
+                   y >= array.y and y < array.y + array.height then
+                    UI.selected = #screen.buttons + #screen.inputs + i
+                    
+                    -- Проверяем клик по конкретной кнопке
+                    local relativeY = y - array.y - 1
+                    local btnIndex = array.scrollOffset + relativeY
+                    if btnIndex >= 1 and btnIndex <= #array.buttons then
+                        array.buttons[btnIndex].onClick()
+                    end
                 end
             end
         
         elseif event == "key" then
             -- Навигация стрелками или WSAD
             if key == 264 or key == 83 then -- Down/S
-                UI.selected = math.min(UI.selected + 1, #buttons + #inputs)
+              local total = #screen.buttons + #screen.inputs + #screen.buttonArrays
+              UI.selected = (UI.selected % total) + 1
             elseif key == 265 or key == 87 then -- Up/W
-                UI.selected = math.max(UI.selected - 1, 1)
+              local total = #screen.buttons + #screen.inputs + #screen.buttonArrays
+              UI.selected = ((UI.selected - 2) % total) + 1
             elseif key == 257 then -- Enter
-                if UI.selected <= #buttons then
-                    if buttons[UI.selected].onClick then 
-                        buttons[UI.selected].onClick() 
+                if UI.selected <= #screen.buttons then
+                    if screen.buttons[UI.selected].onClick then 
+                        screen.buttons[UI.selected].onClick() 
                     end
+                elseif UI.selected <= #screen.buttons + #screen.inputs then
+                    local inp = screen.inputs[UI.selected - #screen.buttons]
+                    UI.handleTextInput(inp, screen.buttons, screen.inputs, screen.labels)
                 else
-                    local inp = inputs[UI.selected - #buttons]
-                    UI.handleTextInput(inp, buttons, inputs)
+                    local array = screen.buttonArrays[UI.selected - #screen.buttons - #screen.inputs]
+                    -- Можно добавить действие при нажатии Enter на массиве
                 end
             end
             
             -- Обновление выделения
-            for i, btn in ipairs(buttons) do
+            for i, btn in ipairs(screen.buttons) do
                 btn.selected = (i == UI.selected)
             end
-            for i, inp in ipairs(inputs) do
-                inp.selected = (#buttons + i == UI.selected)
+            for i, inp in ipairs(screen.inputs) do
+                inp.selected = (i + #screen.buttons == UI.selected)
+            end
+            for i, array in ipairs(screen.buttonArrays) do
+                array.selected = (i + #screen.buttons + #screen.inputs == UI.selected)
+            end
+        
+        elseif event == "mouse_scroll" then
+            -- Обработка прокрутки только для выделенного массива кнопок
+            if UI.selected > #screen.buttons + #screen.inputs then
+                local arrayIndex = UI.selected - #screen.buttons - #screen.inputs
+                if arrayIndex >= 1 and arrayIndex <= #screen.buttonArrays then
+                    local array = screen.buttonArrays[arrayIndex]
+                end    
+                if array then
+                    if key == -1 then -- Прокрутка вверх
+                        array.scrollOffset = math.max(0, array.scrollOffset - 1)
+                    elseif key == 1 then -- Прокрутка вниз
+                        array.scrollOffset = math.min(#array.buttons - array.visibleRows, array.scrollOffset + 1)
+                    end
+                end
             end
         end
         
-        UI.draw(buttons, inputs)
+        UI.draw(screen.buttons, screen.inputs, screen.labels, screen.buttonArrays)
     end
 end
 
--- Пример использования
-local buttons = {
-    UI.createButton("Сохранить", 10, 5, 12, 3, function() 
-        print("Текст сохранен!")
-    end)
-}
-
-local inputs = {
-    UI.createInput(10, 10, 25, 3, "Введите текст")
-}
-
--- Запуск интерфейса
-UI.run(buttons, inputs)
+return UI
